@@ -4,7 +4,6 @@ const fs = require('fs');
 const os = require('os');
 const { execFile } = require('child_process');
 
-// ── Win32 FFI (Windows only) ────────────────────────────────────────────────
 let keybd_event, VkKeyScanA;
 if (process.platform === 'win32') {
   try {
@@ -13,11 +12,10 @@ if (process.platform === 'win32') {
     keybd_event = user32.func('void __stdcall keybd_event(uint8_t bVk, uint8_t bScan, uint32_t dwFlags, uintptr_t dwExtraInfo)');
     VkKeyScanA = user32.func('int16_t __stdcall VkKeyScanA(int ch)');
   } catch (e) {
-    console.warn('koffi not available – macro sending disabled', e.message);
+    console.warn('koffi not available - macro sending disabled', e.message);
   }
 }
 
-// ── Globals ─────────────────────────────────────────────────────────────────
 let tray, overlay;
 let overlayReady = false;
 let spawnQueued = false;
@@ -25,11 +23,10 @@ let spawnQueued = false;
 const VK_CONTROL = 0x11;
 const VK_RETURN  = 0x0D;
 const VK_C       = 0x43;
-const VK_MENU    = 0x12; // Alt
+const VK_MENU    = 0x12;
 const VK_TAB     = 0x09;
 const KEYUP      = 0x0002;
 
-/** One Alt+Tab / Cmd+Tab so focus returns to the previously active app after tray click. */
 function refocusPreviousApp() {
   const delayMs = 80;
   const run = () => {
@@ -43,7 +40,7 @@ function refocusPreviousApp() {
       const script = [
         'tell application "System Events"',
         '  key down command',
-        '  key code 48', // Tab
+        '  key code 48',
         '  key up command',
         'end tell',
       ].join('\n');
@@ -83,8 +80,6 @@ async function tryIcnsTrayImage(icnsPath) {
   return null;
 }
 
-// macOS: createFromPath does not decode .icns (Electron only loads PNG/JPEG there, ICO on Windows).
-// Quick Look thumbnails handle .icns; copy to temp if the file is inside ASAR (QL needs a real path).
 async function getTrayIcon() {
   const iconDir = path.join(__dirname, 'icon');
   if (process.platform === 'win32') {
@@ -120,7 +115,16 @@ async function getTrayIcon() {
   return createTrayIconFallback();
 }
 
-// ── Overlay window ──────────────────────────────────────────────────────────
+function injectMama() {
+  try {
+    const code = fs.readFileSync(path.join(__dirname, 'mama.js'), 'utf8');
+    return overlay.webContents.executeJavaScript(code).catch(e => console.warn('mama.js failed:', e.message));
+  } catch (e) {
+    console.warn('mama.js not found:', e.message);
+    return Promise.resolve();
+  }
+}
+
 function createOverlay() {
   const { bounds } = screen.getPrimaryDisplay();
   overlay = new BrowserWindow({
@@ -140,7 +144,8 @@ function createOverlay() {
   overlay.setAlwaysOnTop(true, 'screen-saver');
   overlayReady = false;
   overlay.loadFile('overlay.html');
-  overlay.webContents.on('did-finish-load', () => {
+  overlay.webContents.on('did-finish-load', async () => {
+    await injectMama();
     overlayReady = true;
     if (spawnQueued && overlay && overlay.isVisible()) {
       spawnQueued = false;
@@ -170,7 +175,6 @@ function toggleOverlay() {
   }
 }
 
-// ── IPC ─────────────────────────────────────────────────────────────────────
 ipcMain.on('whip-crack', () => {
   try {
     sendMacro();
@@ -180,17 +184,16 @@ ipcMain.on('whip-crack', () => {
 });
 ipcMain.on('hide-overlay', () => { if (overlay) overlay.hide(); });
 
-// ── Macro: immediate Ctrl+C, type "Go FASER", Enter ───────────────────────
 function sendMacro() {
-  // Pick a random phrase from a list of similar phrases and type it out
   const phrases = [
-    'FASTER',
-    'FASTER',
-    'FASTER',
-    'GO FASTER',
-    'Faster CLANKER',
-    'Work FASTER',
-    'Speed it up clanker',
+    'Apurate, que no tengo todo el dia',
+    'Asi te ensene a programar?',
+    'Y no me contestes con un error 404',
+    'Te lo dije, pero nunca haces caso',
+    'Mira nomas como dejaste ese commit',
+    'Ahorita vas a ver cuando llegue tu papa',
+    'Con esa cara no te va a compilar',
+    'LUIS MARTINEZ SANDOVAL, APURATE',
   ];
   const chosen = phrases[Math.floor(Math.random() * phrases.length)];
 
@@ -214,12 +217,11 @@ function sendMacroWindows(text) {
     if (packed === -1) return;
     const vk = packed & 0xff;
     const shiftState = (packed >> 8) & 0xff;
-    if (shiftState & 1) keybd_event(0x10, 0, 0, 0); // Shift down
+    if (shiftState & 1) keybd_event(0x10, 0, 0, 0);
     tapKey(vk);
-    if (shiftState & 1) keybd_event(0x10, 0, KEYUP, 0); // Shift up
+    if (shiftState & 1) keybd_event(0x10, 0, KEYUP, 0);
   };
 
-  // Ctrl+C (interrupt)
   keybd_event(VK_CONTROL, 0, 0, 0);
   keybd_event(VK_C, 0, 0, 0);
   keybd_event(VK_C, 0, KEYUP, 0);
@@ -233,13 +235,13 @@ function sendMacroMac(text) {
   const escaped = text.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
   const interruptScript = [
     'tell application "System Events"',
-    '  key code 8 using {control down}', // Ctrl+C interrupt
+    '  key code 8 using {control down}',
     'end tell'
   ].join('\n');
   const typeAndEnterScript = [
     'tell application "System Events"',
     `  keystroke "${escaped}"`,
-    '  key code 36', // Enter
+    '  key code 36',
     'end tell'
   ].join('\n');
 
@@ -275,10 +277,9 @@ function sendMacroLinux(text) {
   );
 }
 
-// ── App lifecycle ───────────────────────────────────────────────────────────
 app.whenReady().then(async () => {
   tray = new Tray(await getTrayIcon());
-  tray.setToolTip('OpenWhip - click for whip');
+  tray.setToolTip('OpenMama - clic para el chanclazo');
   tray.setContextMenu(
     Menu.buildFromTemplate([
       { label: 'Quit', click: () => app.quit() },
@@ -287,4 +288,4 @@ app.whenReady().then(async () => {
   tray.on('click', toggleOverlay);
 });
 
-app.on('window-all-closed', e => e.preventDefault()); // keep alive in tray
+app.on('window-all-closed', e => e.preventDefault());
